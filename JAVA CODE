@@ -1,183 +1,319 @@
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.YearMonth;
 import java.util.*;
-import java.util.Scanner;
+import java.util.regex.Pattern;
 
-import org.json.JSONObject;
-
-// ---------------- Custom Exception ----------------
-class ConversionException extends Exception {
-    public ConversionException(String message) {
-        super(message);
-    }
-}
-
-// ---------------- Generic Converters ----------------
-class TypeSafeConverter {
-    public static BigDecimal toBigDecimal(JSONObject json, String key) throws ConversionException {
-        if (!json.has(key)) throw new ConversionException("Conversion error for field '" + key + "': missing");
-        try {
-            return new BigDecimal(json.get(key).toString());
-        } catch (Exception e) {
-            throw new ConversionException("Conversion error for field '" + key + "': not a valid decimal: " + json.get(key));
-        }
-    }
-
-    public static int toInt(JSONObject json, String key, int defaultVal) throws ConversionException {
-        if (!json.has(key)) return defaultVal;
-        try {
-            return Integer.parseInt(json.get(key).toString());
-        } catch (Exception e) {
-            throw new ConversionException("Conversion error for field '" + key + "'");
-        }
-    }
-
-    public static double toDouble(JSONObject json, String key) throws ConversionException {
-        if (!json.has(key)) throw new ConversionException("Conversion error for field '" + key + "': missing");
-        try {
-            return Double.parseDouble(json.get(key).toString());
-        } catch (Exception e) {
-            throw new ConversionException("Conversion error for field '" + key + "'");
-        }
-    }
-
-    public static String toString(JSONObject json, String key, String defaultVal) {
-        if (!json.has(key)) return defaultVal;
-        return json.get(key).toString();
-    }
-}
-
-// ---------------- Interest Calculator Interface ----------------
-interface FinancialCalculator {
-    BigDecimal calculateInterest();
-    BigDecimal calculateTotal();
-    BigDecimal effectiveAnnualRatePercent();
-    Map<String, BigDecimal> asMap();
-}
-
-// ---------------- Simple Interest Calculator ----------------
-class SimpleInterestCalculator implements FinancialCalculator {
-    private final BigDecimal principal;
-    private final BigDecimal ratePercent;
-    private final BigDecimal timeYears;
-
-    public SimpleInterestCalculator(BigDecimal principal, BigDecimal ratePercent, BigDecimal timeYears) {
-        this.principal = principal;
-        this.ratePercent = ratePercent;
-        this.timeYears = timeYears;
-    }
-
-    public BigDecimal calculateInterest() {
-        return principal.multiply(ratePercent).multiply(timeYears)
-                .divide(BigDecimal.valueOf(100), 8, RoundingMode.HALF_UP);
-    }
-
-    public BigDecimal calculateTotal() {
-        return principal.add(calculateInterest());
-    }
-
-    public BigDecimal effectiveAnnualRatePercent() {
-        return ratePercent;
-    }
-
-    public Map<String, BigDecimal> asMap() {
-        Map<String, BigDecimal> map = new HashMap<>();
-        map.put("interest", calculateInterest());
-        map.put("total", calculateTotal());
-        map.put("effectiveAnnualRatePercent", effectiveAnnualRatePercent());
-        return map;
-    }
-}
-
-// ---------------- Compound Interest Calculator ----------------
-class CompoundInterestCalculator implements FinancialCalculator {
-    private final BigDecimal principal;
-    private final BigDecimal ratePercent;
-    private final BigDecimal timeYears;
-    private final int compoundFreq;
-
-    public CompoundInterestCalculator(BigDecimal principal, BigDecimal ratePercent, BigDecimal timeYears, int compoundFreq) {
-        this.principal = principal;
-        this.ratePercent = ratePercent;
-        this.timeYears = timeYears;
-        this.compoundFreq = compoundFreq;
-    }
-
-    public BigDecimal calculateInterest() {
-        double P = principal.doubleValue();
-        double r = ratePercent.doubleValue() / 100.0;
-        double t = timeYears.doubleValue();
-        double n = compoundFreq;
-        double A = P * Math.pow((1 + r / n), n * t);
-        return BigDecimal.valueOf(A - P).setScale(8, RoundingMode.HALF_UP);
-    }
-
-    public BigDecimal calculateTotal() {
-        return principal.add(calculateInterest());
-    }
-
-    public BigDecimal effectiveAnnualRatePercent() {
-        double r = ratePercent.doubleValue() / 100.0;
-        double n = compoundFreq;
-        double EAR = Math.pow((1 + r / n), n) - 1;
-        return BigDecimal.valueOf(EAR * 100).setScale(8, RoundingMode.HALF_UP);
-    }
-
-    public Map<String, BigDecimal> asMap() {
-        Map<String, BigDecimal> map = new HashMap<>();
-        map.put("interest", calculateInterest());
-        map.put("total", calculateTotal());
-        map.put("effectiveAnnualRatePercent", effectiveAnnualRatePercent());
-        return map;
-    }
-}
-
-// ---------------- Factory ----------------
-class FinancialCalculatorFactory {
-    public static FinancialCalculator fromJson(JSONObject json) throws ConversionException {
-        BigDecimal principal = TypeSafeConverter.toBigDecimal(json, "principal");
-        BigDecimal ratePercent = TypeSafeConverter.toBigDecimal(json, "ratePercent");
-        BigDecimal timeYears = TypeSafeConverter.toBigDecimal(json, "timeYears");
-        String type = TypeSafeConverter.toString(json, "type", "simple");
-
-        if (type.equalsIgnoreCase("simple")) {
-            return new SimpleInterestCalculator(principal, ratePercent, timeYears);
-        } else if (type.equalsIgnoreCase("compound")) {
-            int freq = TypeSafeConverter.toInt(json, "compoundFreq", 1);
-            return new CompoundInterestCalculator(principal, ratePercent, timeYears, freq);
-        } else {
-            throw new ConversionException("Unknown type: " + type);
-        }
-    }
-}
-
-// ---------------- Main App ----------------
-public class FinancialInterestApp {
+/* ================== MAIN APP ================== */
+public class PaymentApp {
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
 
-        System.out.println("=== Financial Interest Calculator ===");
-        System.out.println("Enter financial data as JSON (e.g. {\"principal\":\"10000\",\"ratePercent\":\"7.5\",\"timeYears\":\"2\",\"type\":\"simple\"})");
-        System.out.print("Your JSON: ");
-        String input = sc.nextLine();
+        PaymentGateway gateway = new PaymentGateway();
+        gateway.register(new CreditCardPayment(new InMemoryCardNetwork()));
+        gateway.register(new UPIPayment(new MockUPINetwork()));
+        gateway.register(new WalletPayment(new InMemoryWalletStore()));
 
-        try {
-            JSONObject json = new JSONObject(input);
-            FinancialCalculator calc = FinancialCalculatorFactory.fromJson(json);
+        System.out.println("=== Payment Processing System ===");
+        System.out.println("Select Payment Type:");
+        System.out.println("1. Credit Card");
+        System.out.println("2. UPI");
+        System.out.println("3. Wallet");
+        System.out.print("Choice: ");
+        int choice = sc.nextInt();
+        sc.nextLine(); // consume newline
 
-            System.out.println("Result -> interest: " + calc.calculateInterest()
-                    + ", total: " + calc.calculateTotal()
-                    + ", EAR%: " + calc.effectiveAnnualRatePercent());
+        System.out.print("Enter amount: ");
+        BigDecimal amt = sc.nextBigDecimal();
+        sc.nextLine();
 
-            System.out.println("AsMap -> " + calc.asMap());
+        System.out.print("Enter currency (e.g., INR): ");
+        String currency = sc.nextLine().trim();
 
-        } catch (ConversionException e) {
-            System.out.println("ERROR! " + e.getMessage());
-        } catch (Exception e) {
-            System.out.println("Unexpected ERROR! " + e.getMessage());
+        PaymentRequest req = null;
+        switch (choice) {
+            case 1:
+                System.out.print("Enter Card Number: ");
+                String number = sc.nextLine().trim();
+                System.out.print("Enter CVV: ");
+                String cvv = sc.nextLine().trim();
+
+                // ✅ FIXED expiry parsing
+                System.out.print("Enter Expiry (MM/YYYY): ");
+                String expStr = sc.nextLine().trim();
+                String[] parts = expStr.split("/");
+                if (parts.length != 2) {
+                    System.out.println("❌ Invalid format! Please use MM/YYYY (e.g. 12/2026).");
+                    return;
+                }
+                int month = Integer.parseInt(parts[0]);
+                int year = Integer.parseInt(parts[1]);
+                if (month < 1 || month > 12) {
+                    System.out.println("❌ Invalid month! Must be between 01 and 12.");
+                    return;
+                }
+                YearMonth expiry = YearMonth.of(year, month);
+
+                System.out.print("Enter Cardholder Name: ");
+                String holder = sc.nextLine().trim();
+
+                CreditCardDetails cc = new CreditCardDetails(number, cvv, expiry, holder);
+                req = PaymentRequest.card(amt, currency, cc, Map.of("orderId", UUID.randomUUID().toString()));
+                break;
+
+            case 2:
+                System.out.print("Enter UPI ID (e.g., name@upi): ");
+                String vpa = sc.nextLine().trim();
+                UPIDetails upi = new UPIDetails(vpa);
+                req = PaymentRequest.upi(amt, currency, upi, Map.of("orderId", UUID.randomUUID().toString()));
+                break;
+
+            case 3:
+                System.out.print("Enter Wallet ID: ");
+                String wid = sc.nextLine().trim();
+                System.out.print("Enter Wallet PIN: ");
+                String pin = sc.nextLine().trim();
+                WalletDetails wd = new WalletDetails(wid, pin);
+                req = PaymentRequest.wallet(amt, currency, wd, Map.of("orderId", UUID.randomUUID().toString()));
+                break;
+
+            default:
+                System.out.println("Invalid choice");
+                return;
         }
 
-        sc.close();
+        System.out.println("\n=== Processing Payment ===");
+        try {
+            PaymentResult result = gateway.process(req);
+            System.out.println("STATUS : " + result.status);
+            System.out.println("TxnId  : " + result.transactionId);
+            System.out.println("Message: " + result.message);
+        } catch (PaymentException ex) {
+            System.out.println("FAILED: " + ex.getMessage());
+        }
     }
 }
+
+/* ================== DOMAIN MODELS ================== */
+
+enum PaymentType { CREDIT_CARD, UPI, WALLET }
+
+final class PaymentRequest {
+    final PaymentType type;
+    final BigDecimal amount;
+    final String currency;
+    final Object methodDetails;
+    final Map<String, String> metadata;
+
+    private PaymentRequest(PaymentType type, BigDecimal amount, String currency,
+                           Object methodDetails, Map<String,String> metadata) {
+        this.type = type;
+        this.amount = amount;
+        this.currency = currency;
+        this.methodDetails = methodDetails;
+        this.metadata = metadata;
+    }
+
+    static PaymentRequest card(BigDecimal amt, String cur, CreditCardDetails d, Map<String,String> meta) {
+        return new PaymentRequest(PaymentType.CREDIT_CARD, amt, cur, d, meta);
+    }
+    static PaymentRequest upi(BigDecimal amt, String cur, UPIDetails d, Map<String,String> meta) {
+        return new PaymentRequest(PaymentType.UPI, amt, cur, d, meta);
+    }
+    static PaymentRequest wallet(BigDecimal amt, String cur, WalletDetails d, Map<String,String> meta) {
+        return new PaymentRequest(PaymentType.WALLET, amt, cur, d, meta);
+    }
+
+    public PaymentType getType() { return type; }
+}
+
+final class PaymentResult {
+    enum Status { APPROVED, DECLINED, ERROR }
+    final Status status;
+    final String transactionId;
+    final String message;
+
+    PaymentResult(Status status, String transactionId, String message) {
+        this.status = status;
+        this.transactionId = transactionId;
+        this.message = message;
+    }
+
+    static PaymentResult approved(String txnId, String msg) {
+        return new PaymentResult(Status.APPROVED, txnId, msg);
+    }
+    static PaymentResult declined(String msg) {
+        return new PaymentResult(Status.DECLINED, null, msg);
+    }
+    static PaymentResult error(String msg) {
+        return new PaymentResult(Status.ERROR, null, msg);
+    }
+}
+
+/* ================== INTERFACE + ABSTRACT ================== */
+
+interface PaymentMethod {
+    PaymentType supportsType();
+    PaymentResult process(PaymentRequest request);
+}
+
+abstract class AbstractPaymentMethod implements PaymentMethod {
+    @Override
+    public final PaymentResult process(PaymentRequest request) {
+        try {
+            validate(request);
+            String authId = authorize(request);
+            String txnId = capture(request, authId);
+            return PaymentResult.approved(txnId, "Payment successful");
+        } catch (PaymentException e) {
+            return PaymentResult.declined(e.getMessage());
+        }
+    }
+    protected abstract void validate(PaymentRequest request) throws PaymentException;
+    protected abstract String authorize(PaymentRequest request) throws PaymentException;
+    protected abstract String capture(PaymentRequest request, String authId) throws PaymentException;
+}
+
+/* ================== CREDIT CARD ================== */
+
+final class CreditCardDetails {
+    final String number, cvv, cardholder;
+    final YearMonth expiry;
+    CreditCardDetails(String n, String c, YearMonth e, String h) {
+        number=n; cvv=c; expiry=e; cardholder=h;
+    }
+}
+
+interface CardNetwork {
+    String preAuthorize(CreditCardDetails d, BigDecimal amt, String cur);
+    String capture(String authId, BigDecimal amt);
+}
+
+final class InMemoryCardNetwork implements CardNetwork {
+    public String preAuthorize(CreditCardDetails d, BigDecimal amt, String cur) {
+        if (amt.compareTo(new BigDecimal("10000"))>0) throw new AuthorizationException("Limit exceeded");
+        return "AUTH-" + UUID.randomUUID();
+    }
+    public String capture(String authId, BigDecimal amt) {
+        return "TXN-CC-" + UUID.randomUUID();
+    }
+}
+
+final class CreditCardPayment extends AbstractPaymentMethod {
+    private final CardNetwork network;
+    CreditCardPayment(CardNetwork n){ this.network=n; }
+    public PaymentType supportsType(){ return PaymentType.CREDIT_CARD; }
+
+    protected void validate(PaymentRequest req){
+        CreditCardDetails d=(CreditCardDetails)req.methodDetails;
+        if(!luhn(d.number)) throw new ValidationException("Invalid card number");
+        if(d.expiry.isBefore(YearMonth.now())) throw new ValidationException("Expired card");
+        if(d.cvv.length()<3) throw new ValidationException("Invalid CVV");
+    }
+    protected String authorize(PaymentRequest req){ 
+        return network.preAuthorize((CreditCardDetails)req.methodDetails, req.amount, req.currency); 
+    }
+    protected String capture(PaymentRequest req,String authId){ 
+        return network.capture(authId, req.amount); 
+    }
+
+    private boolean luhn(String num){
+        int sum=0; boolean alt=false;
+        for(int i=num.length()-1;i>=0;i--){
+            int n=num.charAt(i)-'0';
+            if(alt){ n*=2; if(n>9)n-=9; }
+            sum+=n; alt=!alt;
+        }
+        return sum%10==0;
+    }
+}
+
+/* ================== UPI ================== */
+
+final class UPIDetails { final String vpa; UPIDetails(String v){ vpa=v; } }
+interface UPINetwork { String collect(UPIDetails d, BigDecimal amt, String cur); }
+
+final class MockUPINetwork implements UPINetwork {
+    public String collect(UPIDetails d, BigDecimal amt, String cur){
+        if(!d.vpa.contains("@")) throw new AuthorizationException("Invalid UPI ID");
+        return "TXN-UPI-" + UUID.randomUUID();
+    }
+}
+
+final class UPIPayment extends AbstractPaymentMethod {
+    private final UPINetwork net;
+    UPIPayment(UPINetwork n){ net=n; }
+    public PaymentType supportsType(){ return PaymentType.UPI; }
+
+    protected void validate(PaymentRequest req){
+        UPIDetails d=(UPIDetails)req.methodDetails;
+        if(!Pattern.matches("^[\\w.-]+@[a-zA-Z]+$", d.vpa))
+            throw new ValidationException("Bad UPI format");
+    }
+    protected String authorize(PaymentRequest req){ 
+        return "AUTH-UPI-" + UUID.randomUUID(); 
+    }
+    protected String capture(PaymentRequest req,String authId){ 
+        return net.collect((UPIDetails)req.methodDetails, req.amount, req.currency); 
+    }
+}
+
+/* ================== WALLET ================== */
+
+final class WalletDetails { final String id,pin; WalletDetails(String i,String p){ id=i; pin=p; } }
+interface WalletStore {
+    boolean verify(String id,String pin);
+    BigDecimal balance(String id);
+    void debit(String id,BigDecimal amt);
+}
+
+final class InMemoryWalletStore implements WalletStore {
+    private final Map<String,String> pins=new HashMap<>();
+    private final Map<String,BigDecimal> bal=new HashMap<>();
+    InMemoryWalletStore(){
+        pins.put("WALLET-001","4321");
+        bal.put("WALLET-001",new BigDecimal("1000.00"));
+    }
+    public boolean verify(String id,String pin){ return Objects.equals(pins.get(id),pin); }
+    public BigDecimal balance(String id){ return bal.getOrDefault(id,BigDecimal.ZERO); }
+    public void debit(String id,BigDecimal amt){
+        if(balance(id).compareTo(amt)<0) throw new CaptureException("Insufficient funds");
+        bal.put(id,balance(id).subtract(amt));
+    }
+}
+
+final class WalletPayment extends AbstractPaymentMethod {
+    private final WalletStore store;
+    WalletPayment(WalletStore s){ store=s; }
+    public PaymentType supportsType(){ return PaymentType.WALLET; }
+
+    protected void validate(PaymentRequest req){
+        WalletDetails d=(WalletDetails)req.methodDetails;
+        if(!store.verify(d.id,d.pin)) throw new ValidationException("Bad PIN");
+        if(store.balance(d.id).compareTo(req.amount)<0) throw new ValidationException("Not enough balance");
+    }
+    protected String authorize(PaymentRequest req){ return "AUTH-WALLET-"+UUID.randomUUID(); }
+    protected String capture(PaymentRequest req,String authId){
+        WalletDetails d=(WalletDetails)req.methodDetails;
+        store.debit(d.id, req.amount);
+        return "TXN-WALLET-"+UUID.randomUUID();
+    }
+}
+
+/* ================== GATEWAY ================== */
+
+final class PaymentGateway {
+    private final Map<PaymentType,PaymentMethod> reg=new EnumMap<>(PaymentType.class);
+    public void register(PaymentMethod m){ reg.put(m.supportsType(),m); }
+    public PaymentResult process(PaymentRequest req){
+        PaymentMethod m=reg.get(req.getType());
+        if(m==null) throw new PaymentException("No handler");
+        return m.process(req);
+    }
+}
+
+/* ================== EXCEPTIONS ================== */
+
+class PaymentException extends RuntimeException{ PaymentException(String m){super(m);} }
+class ValidationException extends PaymentException{ ValidationException(String m){super(m);} }
+class AuthorizationException extends PaymentException{ AuthorizationException(String m){super(m);} }
+class CaptureException extends PaymentException{ CaptureException(String m){super(m);} }
