@@ -1,0 +1,183 @@
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.YearMonth;
+import java.util.*;
+import java.util.Scanner;
+
+import org.json.JSONObject;
+
+// ---------------- Custom Exception ----------------
+class ConversionException extends Exception {
+    public ConversionException(String message) {
+        super(message);
+    }
+}
+
+// ---------------- Generic Converters ----------------
+class TypeSafeConverter {
+    public static BigDecimal toBigDecimal(JSONObject json, String key) throws ConversionException {
+        if (!json.has(key)) throw new ConversionException("Conversion error for field '" + key + "': missing");
+        try {
+            return new BigDecimal(json.get(key).toString());
+        } catch (Exception e) {
+            throw new ConversionException("Conversion error for field '" + key + "': not a valid decimal: " + json.get(key));
+        }
+    }
+
+    public static int toInt(JSONObject json, String key, int defaultVal) throws ConversionException {
+        if (!json.has(key)) return defaultVal;
+        try {
+            return Integer.parseInt(json.get(key).toString());
+        } catch (Exception e) {
+            throw new ConversionException("Conversion error for field '" + key + "'");
+        }
+    }
+
+    public static double toDouble(JSONObject json, String key) throws ConversionException {
+        if (!json.has(key)) throw new ConversionException("Conversion error for field '" + key + "': missing");
+        try {
+            return Double.parseDouble(json.get(key).toString());
+        } catch (Exception e) {
+            throw new ConversionException("Conversion error for field '" + key + "'");
+        }
+    }
+
+    public static String toString(JSONObject json, String key, String defaultVal) {
+        if (!json.has(key)) return defaultVal;
+        return json.get(key).toString();
+    }
+}
+
+// ---------------- Interest Calculator Interface ----------------
+interface FinancialCalculator {
+    BigDecimal calculateInterest();
+    BigDecimal calculateTotal();
+    BigDecimal effectiveAnnualRatePercent();
+    Map<String, BigDecimal> asMap();
+}
+
+// ---------------- Simple Interest Calculator ----------------
+class SimpleInterestCalculator implements FinancialCalculator {
+    private final BigDecimal principal;
+    private final BigDecimal ratePercent;
+    private final BigDecimal timeYears;
+
+    public SimpleInterestCalculator(BigDecimal principal, BigDecimal ratePercent, BigDecimal timeYears) {
+        this.principal = principal;
+        this.ratePercent = ratePercent;
+        this.timeYears = timeYears;
+    }
+
+    public BigDecimal calculateInterest() {
+        return principal.multiply(ratePercent).multiply(timeYears)
+                .divide(BigDecimal.valueOf(100), 8, RoundingMode.HALF_UP);
+    }
+
+    public BigDecimal calculateTotal() {
+        return principal.add(calculateInterest());
+    }
+
+    public BigDecimal effectiveAnnualRatePercent() {
+        return ratePercent;
+    }
+
+    public Map<String, BigDecimal> asMap() {
+        Map<String, BigDecimal> map = new HashMap<>();
+        map.put("interest", calculateInterest());
+        map.put("total", calculateTotal());
+        map.put("effectiveAnnualRatePercent", effectiveAnnualRatePercent());
+        return map;
+    }
+}
+
+// ---------------- Compound Interest Calculator ----------------
+class CompoundInterestCalculator implements FinancialCalculator {
+    private final BigDecimal principal;
+    private final BigDecimal ratePercent;
+    private final BigDecimal timeYears;
+    private final int compoundFreq;
+
+    public CompoundInterestCalculator(BigDecimal principal, BigDecimal ratePercent, BigDecimal timeYears, int compoundFreq) {
+        this.principal = principal;
+        this.ratePercent = ratePercent;
+        this.timeYears = timeYears;
+        this.compoundFreq = compoundFreq;
+    }
+
+    public BigDecimal calculateInterest() {
+        double P = principal.doubleValue();
+        double r = ratePercent.doubleValue() / 100.0;
+        double t = timeYears.doubleValue();
+        double n = compoundFreq;
+        double A = P * Math.pow((1 + r / n), n * t);
+        return BigDecimal.valueOf(A - P).setScale(8, RoundingMode.HALF_UP);
+    }
+
+    public BigDecimal calculateTotal() {
+        return principal.add(calculateInterest());
+    }
+
+    public BigDecimal effectiveAnnualRatePercent() {
+        double r = ratePercent.doubleValue() / 100.0;
+        double n = compoundFreq;
+        double EAR = Math.pow((1 + r / n), n) - 1;
+        return BigDecimal.valueOf(EAR * 100).setScale(8, RoundingMode.HALF_UP);
+    }
+
+    public Map<String, BigDecimal> asMap() {
+        Map<String, BigDecimal> map = new HashMap<>();
+        map.put("interest", calculateInterest());
+        map.put("total", calculateTotal());
+        map.put("effectiveAnnualRatePercent", effectiveAnnualRatePercent());
+        return map;
+    }
+}
+
+// ---------------- Factory ----------------
+class FinancialCalculatorFactory {
+    public static FinancialCalculator fromJson(JSONObject json) throws ConversionException {
+        BigDecimal principal = TypeSafeConverter.toBigDecimal(json, "principal");
+        BigDecimal ratePercent = TypeSafeConverter.toBigDecimal(json, "ratePercent");
+        BigDecimal timeYears = TypeSafeConverter.toBigDecimal(json, "timeYears");
+        String type = TypeSafeConverter.toString(json, "type", "simple");
+
+        if (type.equalsIgnoreCase("simple")) {
+            return new SimpleInterestCalculator(principal, ratePercent, timeYears);
+        } else if (type.equalsIgnoreCase("compound")) {
+            int freq = TypeSafeConverter.toInt(json, "compoundFreq", 1);
+            return new CompoundInterestCalculator(principal, ratePercent, timeYears, freq);
+        } else {
+            throw new ConversionException("Unknown type: " + type);
+        }
+    }
+}
+
+// ---------------- Main App ----------------
+public class FinancialInterestApp {
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+
+        System.out.println("=== Financial Interest Calculator ===");
+        System.out.println("Enter financial data as JSON (e.g. {\"principal\":\"10000\",\"ratePercent\":\"7.5\",\"timeYears\":\"2\",\"type\":\"simple\"})");
+        System.out.print("Your JSON: ");
+        String input = sc.nextLine();
+
+        try {
+            JSONObject json = new JSONObject(input);
+            FinancialCalculator calc = FinancialCalculatorFactory.fromJson(json);
+
+            System.out.println("Result -> interest: " + calc.calculateInterest()
+                    + ", total: " + calc.calculateTotal()
+                    + ", EAR%: " + calc.effectiveAnnualRatePercent());
+
+            System.out.println("AsMap -> " + calc.asMap());
+
+        } catch (ConversionException e) {
+            System.out.println("ERROR! " + e.getMessage());
+        } catch (Exception e) {
+            System.out.println("Unexpected ERROR! " + e.getMessage());
+        }
+
+        sc.close();
+    }
+}
