@@ -1,319 +1,150 @@
-import java.math.BigDecimal;
-import java.time.YearMonth;
 import java.util.*;
-import java.util.regex.Pattern;
 
-/* ================== MAIN APP ================== */
-public class PaymentApp {
-    public static void main(String[] args) {
-        Scanner sc = new Scanner(System.in);
+// ====== Payment Request ======
+class PaymentRequest {
+    private final PaymentType type;
+    private final double amount;
+    private final String account;
+    private final String extra;
 
-        PaymentGateway gateway = new PaymentGateway();
-        gateway.register(new CreditCardPayment(new InMemoryCardNetwork()));
-        gateway.register(new UPIPayment(new MockUPINetwork()));
-        gateway.register(new WalletPayment(new InMemoryWalletStore()));
-
-        System.out.println("=== Payment Processing System ===");
-        System.out.println("Select Payment Type:");
-        System.out.println("1. Credit Card");
-        System.out.println("2. UPI");
-        System.out.println("3. Wallet");
-        System.out.print("Choice: ");
-        int choice = sc.nextInt();
-        sc.nextLine(); // consume newline
-
-        System.out.print("Enter amount: ");
-        BigDecimal amt = sc.nextBigDecimal();
-        sc.nextLine();
-
-        System.out.print("Enter currency (e.g., INR): ");
-        String currency = sc.nextLine().trim();
-
-        PaymentRequest req = null;
-        switch (choice) {
-            case 1:
-                System.out.print("Enter Card Number: ");
-                String number = sc.nextLine().trim();
-                System.out.print("Enter CVV: ");
-                String cvv = sc.nextLine().trim();
-
-                // ✅ FIXED expiry parsing
-                System.out.print("Enter Expiry (MM/YYYY): ");
-                String expStr = sc.nextLine().trim();
-                String[] parts = expStr.split("/");
-                if (parts.length != 2) {
-                    System.out.println("❌ Invalid format! Please use MM/YYYY (e.g. 12/2026).");
-                    return;
-                }
-                int month = Integer.parseInt(parts[0]);
-                int year = Integer.parseInt(parts[1]);
-                if (month < 1 || month > 12) {
-                    System.out.println("❌ Invalid month! Must be between 01 and 12.");
-                    return;
-                }
-                YearMonth expiry = YearMonth.of(year, month);
-
-                System.out.print("Enter Cardholder Name: ");
-                String holder = sc.nextLine().trim();
-
-                CreditCardDetails cc = new CreditCardDetails(number, cvv, expiry, holder);
-                req = PaymentRequest.card(amt, currency, cc, Map.of("orderId", UUID.randomUUID().toString()));
-                break;
-
-            case 2:
-                System.out.print("Enter UPI ID (e.g., name@upi): ");
-                String vpa = sc.nextLine().trim();
-                UPIDetails upi = new UPIDetails(vpa);
-                req = PaymentRequest.upi(amt, currency, upi, Map.of("orderId", UUID.randomUUID().toString()));
-                break;
-
-            case 3:
-                System.out.print("Enter Wallet ID: ");
-                String wid = sc.nextLine().trim();
-                System.out.print("Enter Wallet PIN: ");
-                String pin = sc.nextLine().trim();
-                WalletDetails wd = new WalletDetails(wid, pin);
-                req = PaymentRequest.wallet(amt, currency, wd, Map.of("orderId", UUID.randomUUID().toString()));
-                break;
-
-            default:
-                System.out.println("Invalid choice");
-                return;
-        }
-
-        System.out.println("\n=== Processing Payment ===");
-        try {
-            PaymentResult result = gateway.process(req);
-            System.out.println("STATUS : " + result.status);
-            System.out.println("TxnId  : " + result.transactionId);
-            System.out.println("Message: " + result.message);
-        } catch (PaymentException ex) {
-            System.out.println("FAILED: " + ex.getMessage());
-        }
-    }
-}
-
-/* ================== DOMAIN MODELS ================== */
-
-enum PaymentType { CREDIT_CARD, UPI, WALLET }
-
-final class PaymentRequest {
-    final PaymentType type;
-    final BigDecimal amount;
-    final String currency;
-    final Object methodDetails;
-    final Map<String, String> metadata;
-
-    private PaymentRequest(PaymentType type, BigDecimal amount, String currency,
-                           Object methodDetails, Map<String,String> metadata) {
+    public PaymentRequest(PaymentType type, double amount, String account, String extra) {
+        if (amount <= 0) throw new IllegalArgumentException("Amount must be positive");
         this.type = type;
         this.amount = amount;
-        this.currency = currency;
-        this.methodDetails = methodDetails;
-        this.metadata = metadata;
+        this.account = account;
+        this.extra = extra;
     }
 
-    static PaymentRequest card(BigDecimal amt, String cur, CreditCardDetails d, Map<String,String> meta) {
-        return new PaymentRequest(PaymentType.CREDIT_CARD, amt, cur, d, meta);
-    }
-    static PaymentRequest upi(BigDecimal amt, String cur, UPIDetails d, Map<String,String> meta) {
-        return new PaymentRequest(PaymentType.UPI, amt, cur, d, meta);
-    }
-    static PaymentRequest wallet(BigDecimal amt, String cur, WalletDetails d, Map<String,String> meta) {
-        return new PaymentRequest(PaymentType.WALLET, amt, cur, d, meta);
-    }
-
-    public PaymentType getType() { return type; }
+    public PaymentType type() { return type; }
+    public double amount() { return amount; }
+    public String account() { return account; }
+    public String extra() { return extra; }
 }
 
-final class PaymentResult {
-    enum Status { APPROVED, DECLINED, ERROR }
-    final Status status;
-    final String transactionId;
-    final String message;
+// ====== Payment Types ======
+enum PaymentType { CREDITCARD, UPI, WALLET }
 
-    PaymentResult(Status status, String transactionId, String message) {
-        this.status = status;
-        this.transactionId = transactionId;
-        this.message = message;
-    }
+// ====== Payment Result ======
+record PaymentResult(String status, String transactionId, String message) {}
 
-    static PaymentResult approved(String txnId, String msg) {
-        return new PaymentResult(Status.APPROVED, txnId, msg);
-    }
-    static PaymentResult declined(String msg) {
-        return new PaymentResult(Status.DECLINED, null, msg);
-    }
-    static PaymentResult error(String msg) {
-        return new PaymentResult(Status.ERROR, null, msg);
-    }
+// ====== Custom Exception ======
+class PaymentException extends Exception {
+    public PaymentException(String msg) { super(msg); }
 }
 
-/* ================== INTERFACE + ABSTRACT ================== */
-
-interface PaymentMethod {
-    PaymentType supportsType();
-    PaymentResult process(PaymentRequest request);
+// ====== Payment Processor Interface ======
+interface PaymentProcessor {
+    PaymentResult process(PaymentRequest req) throws PaymentException;
 }
 
-abstract class AbstractPaymentMethod implements PaymentMethod {
+// ====== Abstract Base Processor ======
+abstract class AbstractProcessor implements PaymentProcessor {
+    protected void validateAmount(double amt) throws PaymentException {
+        if (amt <= 0) throw new PaymentException("Invalid amount: " + amt);
+    }
+    protected String txnId() { return UUID.randomUUID().toString().substring(0,8); }
+}
+
+// ====== CreditCard Processor ======
+class CreditCardProcessor extends AbstractProcessor {
     @Override
-    public final PaymentResult process(PaymentRequest request) {
-        try {
-            validate(request);
-            String authId = authorize(request);
-            String txnId = capture(request, authId);
-            return PaymentResult.approved(txnId, "Payment successful");
-        } catch (PaymentException e) {
-            return PaymentResult.declined(e.getMessage());
+    public PaymentResult process(PaymentRequest req) throws PaymentException {
+        validateAmount(req.amount());
+        if (req.account() == null || req.account().length() < 12)
+            throw new PaymentException("Invalid card number");
+        if (req.extra() == null || !req.extra().matches("(0[1-9]|1[0-2])/\\d{4}"))
+            throw new PaymentException("Invalid expiry date (MM/yyyy)");
+        return new PaymentResult("SUCCESS", txnId(),
+                "CreditCard payment of " + req.amount() + " processed.");
+    }
+}
+
+// ====== UPI Processor ======
+class UPIProcessor extends AbstractProcessor {
+    @Override
+    public PaymentResult process(PaymentRequest req) throws PaymentException {
+        validateAmount(req.amount());
+        if (req.account() == null || !req.account().contains("@"))
+            throw new PaymentException("Invalid UPI ID");
+        return new PaymentResult("SUCCESS", txnId(),
+                "UPI payment of " + req.amount() + " processed.");
+    }
+}
+
+// ====== Wallet Processor ======
+class WalletProcessor extends AbstractProcessor {
+    @Override
+    public PaymentResult process(PaymentRequest req) throws PaymentException {
+        validateAmount(req.amount());
+        if (req.account() == null || req.account().isEmpty())
+            throw new PaymentException("Invalid wallet ID");
+        return new PaymentResult("SUCCESS", txnId(),
+                "Wallet payment of " + req.amount() + " processed.");
+    }
+}
+
+// ====== Payment Gateway (Polymorphic) ======
+class PaymentGateway {
+    private final Map<PaymentType, PaymentProcessor> processors = new HashMap<>();
+    public PaymentGateway() {
+        processors.put(PaymentType.CREDITCARD, new CreditCardProcessor());
+        processors.put(PaymentType.UPI, new UPIProcessor());
+        processors.put(PaymentType.WALLET, new WalletProcessor());
+    }
+    public PaymentResult process(PaymentRequest req) throws PaymentException {
+        PaymentProcessor p = processors.get(req.type());
+        if (p == null) throw new PaymentException("Unsupported type");
+        return p.process(req);
+    }
+}
+
+// ====== Main Application ======
+public class Main {
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+        PaymentGateway gw = new PaymentGateway();
+
+        while (true) {
+            System.out.println("\n=== Payment Menu ===");
+            System.out.println("1. CreditCard\n2. UPI\n3. Wallet\n4. Exit");
+            System.out.print("Choice: ");
+            int c = sc.nextInt(); sc.nextLine();
+            if (c == 4) break;
+
+            PaymentType t = switch (c) {
+                case 1 -> PaymentType.CREDITCARD;
+                case 2 -> PaymentType.UPI;
+                case 3 -> PaymentType.WALLET;
+                default -> null;
+            };
+
+            if (t == null) {
+                System.out.println("Invalid choice, try again.");
+                continue;
+            }
+
+            System.out.print("Amount: ");
+            double amt = sc.nextDouble(); sc.nextLine();
+
+            System.out.print("Account/ID: ");
+            String acc = sc.nextLine();
+
+            String exp = null;
+            if (t == PaymentType.CREDITCARD) {
+                System.out.print("Expiry (MM/yyyy): ");
+                exp = sc.nextLine();
+            }
+
+            PaymentRequest req = new PaymentRequest(t, amt, acc, exp);
+            try {
+                PaymentResult res = gw.process(req);
+                System.out.printf("✅ STATUS: %s | Txn: %s\n",
+                        res.status(), res.transactionId());
+            } catch (PaymentException e) {
+                System.out.println("❌ FAILED: " + e.getMessage());
+            }
         }
-    }
-    protected abstract void validate(PaymentRequest request) throws PaymentException;
-    protected abstract String authorize(PaymentRequest request) throws PaymentException;
-    protected abstract String capture(PaymentRequest request, String authId) throws PaymentException;
-}
 
-/* ================== CREDIT CARD ================== */
-
-final class CreditCardDetails {
-    final String number, cvv, cardholder;
-    final YearMonth expiry;
-    CreditCardDetails(String n, String c, YearMonth e, String h) {
-        number=n; cvv=c; expiry=e; cardholder=h;
+        sc.close();
     }
 }
-
-interface CardNetwork {
-    String preAuthorize(CreditCardDetails d, BigDecimal amt, String cur);
-    String capture(String authId, BigDecimal amt);
-}
-
-final class InMemoryCardNetwork implements CardNetwork {
-    public String preAuthorize(CreditCardDetails d, BigDecimal amt, String cur) {
-        if (amt.compareTo(new BigDecimal("10000"))>0) throw new AuthorizationException("Limit exceeded");
-        return "AUTH-" + UUID.randomUUID();
-    }
-    public String capture(String authId, BigDecimal amt) {
-        return "TXN-CC-" + UUID.randomUUID();
-    }
-}
-
-final class CreditCardPayment extends AbstractPaymentMethod {
-    private final CardNetwork network;
-    CreditCardPayment(CardNetwork n){ this.network=n; }
-    public PaymentType supportsType(){ return PaymentType.CREDIT_CARD; }
-
-    protected void validate(PaymentRequest req){
-        CreditCardDetails d=(CreditCardDetails)req.methodDetails;
-        if(!luhn(d.number)) throw new ValidationException("Invalid card number");
-        if(d.expiry.isBefore(YearMonth.now())) throw new ValidationException("Expired card");
-        if(d.cvv.length()<3) throw new ValidationException("Invalid CVV");
-    }
-    protected String authorize(PaymentRequest req){ 
-        return network.preAuthorize((CreditCardDetails)req.methodDetails, req.amount, req.currency); 
-    }
-    protected String capture(PaymentRequest req,String authId){ 
-        return network.capture(authId, req.amount); 
-    }
-
-    private boolean luhn(String num){
-        int sum=0; boolean alt=false;
-        for(int i=num.length()-1;i>=0;i--){
-            int n=num.charAt(i)-'0';
-            if(alt){ n*=2; if(n>9)n-=9; }
-            sum+=n; alt=!alt;
-        }
-        return sum%10==0;
-    }
-}
-
-/* ================== UPI ================== */
-
-final class UPIDetails { final String vpa; UPIDetails(String v){ vpa=v; } }
-interface UPINetwork { String collect(UPIDetails d, BigDecimal amt, String cur); }
-
-final class MockUPINetwork implements UPINetwork {
-    public String collect(UPIDetails d, BigDecimal amt, String cur){
-        if(!d.vpa.contains("@")) throw new AuthorizationException("Invalid UPI ID");
-        return "TXN-UPI-" + UUID.randomUUID();
-    }
-}
-
-final class UPIPayment extends AbstractPaymentMethod {
-    private final UPINetwork net;
-    UPIPayment(UPINetwork n){ net=n; }
-    public PaymentType supportsType(){ return PaymentType.UPI; }
-
-    protected void validate(PaymentRequest req){
-        UPIDetails d=(UPIDetails)req.methodDetails;
-        if(!Pattern.matches("^[\\w.-]+@[a-zA-Z]+$", d.vpa))
-            throw new ValidationException("Bad UPI format");
-    }
-    protected String authorize(PaymentRequest req){ 
-        return "AUTH-UPI-" + UUID.randomUUID(); 
-    }
-    protected String capture(PaymentRequest req,String authId){ 
-        return net.collect((UPIDetails)req.methodDetails, req.amount, req.currency); 
-    }
-}
-
-/* ================== WALLET ================== */
-
-final class WalletDetails { final String id,pin; WalletDetails(String i,String p){ id=i; pin=p; } }
-interface WalletStore {
-    boolean verify(String id,String pin);
-    BigDecimal balance(String id);
-    void debit(String id,BigDecimal amt);
-}
-
-final class InMemoryWalletStore implements WalletStore {
-    private final Map<String,String> pins=new HashMap<>();
-    private final Map<String,BigDecimal> bal=new HashMap<>();
-    InMemoryWalletStore(){
-        pins.put("WALLET-001","4321");
-        bal.put("WALLET-001",new BigDecimal("1000.00"));
-    }
-    public boolean verify(String id,String pin){ return Objects.equals(pins.get(id),pin); }
-    public BigDecimal balance(String id){ return bal.getOrDefault(id,BigDecimal.ZERO); }
-    public void debit(String id,BigDecimal amt){
-        if(balance(id).compareTo(amt)<0) throw new CaptureException("Insufficient funds");
-        bal.put(id,balance(id).subtract(amt));
-    }
-}
-
-final class WalletPayment extends AbstractPaymentMethod {
-    private final WalletStore store;
-    WalletPayment(WalletStore s){ store=s; }
-    public PaymentType supportsType(){ return PaymentType.WALLET; }
-
-    protected void validate(PaymentRequest req){
-        WalletDetails d=(WalletDetails)req.methodDetails;
-        if(!store.verify(d.id,d.pin)) throw new ValidationException("Bad PIN");
-        if(store.balance(d.id).compareTo(req.amount)<0) throw new ValidationException("Not enough balance");
-    }
-    protected String authorize(PaymentRequest req){ return "AUTH-WALLET-"+UUID.randomUUID(); }
-    protected String capture(PaymentRequest req,String authId){
-        WalletDetails d=(WalletDetails)req.methodDetails;
-        store.debit(d.id, req.amount);
-        return "TXN-WALLET-"+UUID.randomUUID();
-    }
-}
-
-/* ================== GATEWAY ================== */
-
-final class PaymentGateway {
-    private final Map<PaymentType,PaymentMethod> reg=new EnumMap<>(PaymentType.class);
-    public void register(PaymentMethod m){ reg.put(m.supportsType(),m); }
-    public PaymentResult process(PaymentRequest req){
-        PaymentMethod m=reg.get(req.getType());
-        if(m==null) throw new PaymentException("No handler");
-        return m.process(req);
-    }
-}
-
-/* ================== EXCEPTIONS ================== */
-
-class PaymentException extends RuntimeException{ PaymentException(String m){super(m);} }
-class ValidationException extends PaymentException{ ValidationException(String m){super(m);} }
-class AuthorizationException extends PaymentException{ AuthorizationException(String m){super(m);} }
-class CaptureException extends PaymentException{ CaptureException(String m){super(m);} }
